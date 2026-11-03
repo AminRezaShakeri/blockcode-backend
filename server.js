@@ -22,6 +22,7 @@ const DATA_DIR = path.resolve(process.env.DATA_DIR || "./data");
 const MAIL_MODE = process.env.MAIL_MODE || "console";
 const SMTP_URL = process.env.SMTP_URL || "";
 const SMTP_FROM = process.env.SMTP_FROM || "BlokCode <no-reply@example.com>";
+const ALLOW_DEVELOPMENT_VERIFICATION_LINKS = String(process.env.ALLOW_DEVELOPMENT_VERIFICATION_LINKS || "false").toLowerCase() === "true";
 const MERCHANT_ID = process.env.ZARINPAL_MERCHANT_ID || "";
 const PAYMENT_SANDBOX = String(process.env.ZARINPAL_SANDBOX || "true").toLowerCase() !== "false";
 const PAYMENTS_ENABLED = String(process.env.PAYMENTS_ENABLED || "false").toLowerCase() === "true" && Boolean(MERCHANT_ID);
@@ -32,11 +33,14 @@ const VERIFY_HOURS = 24;
 const COOKIE_NAME = "blokcode_session";
 const scrypt = promisify(crypto.scrypt);
 
-if (NODE_ENV === "production" && (MAIL_MODE !== "smtp" || !SMTP_URL)) {
+if (NODE_ENV === "production" && (MAIL_MODE !== "smtp" || !SMTP_URL) && !ALLOW_DEVELOPMENT_VERIFICATION_LINKS) {
   throw new Error("برای production، MAIL_MODE=smtp و SMTP_URL را تنظیم کنید.");
 }
 if (NODE_ENV === "production" && new URL(APP_URL).protocol !== "https:") {
   throw new Error("در production، APP_URL باید با https شروع شود.");
+}
+if (NODE_ENV === "production" && ALLOW_DEVELOPMENT_VERIFICATION_LINKS) {
+  console.warn("Demo mode: verification links are shown to the registering user instead of being emailed.");
 }
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
