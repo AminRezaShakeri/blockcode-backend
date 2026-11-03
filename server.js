@@ -515,7 +515,7 @@ app.use((error, _req, res, _next) => {
   res.status(500).json({ error: "خطای داخلی رخ داد. دوباره تلاش کن." });
 });
 
-app.listen(PORT, () => {
+app.listen(PORT, "0.0.0.0", () => {
   console.log(`BlokCode server is running at ${APP_URL}`);
   console.log(`Payments: ${PAYMENTS_ENABLED ? (PAYMENT_SANDBOX ? "sandbox" : "live") : "disabled"}`);
   console.log(`Email: ${MAIL_MODE}`);
