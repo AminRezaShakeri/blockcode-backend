@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const CONFIG = window.BLOKCODE_CONFIG || { demoMode: true, paymentsEnabled: false, paymentSandbox: true, cardTransferEnabled: false };
+  const CONFIG = window.BLOKCODE_CONFIG || { demoMode: true, cardTransferEnabled: false };
   const DEMO_MODE = CONFIG.demoMode !== false;
   const CARD_TRANSFER_ENABLED = CONFIG.cardTransferEnabled === true;
   const STORAGE_KEY = "blokcode-demo-v1";
@@ -165,49 +165,27 @@
       $("#accountTitle").textContent = "ساخت حساب";
       $("#authDescription").textContent = "ایمیلت را تأیید کن تا موجودی توکن و رازهای بازشده به حسابت وصل شوند.";
       $("#authSubmitButton").textContent = "ساخت حساب و فرستادن پیوند تأیید ←";
-      $("#authFootnote").textContent = "رمز عبور با هش امن ذخیره می‌شود؛ برای پرداخت اطلاعات کارت را فقط در درگاه وارد کن.";
+      $("#authFootnote").textContent = "رمز عبور با هش امن ذخیره می‌شود؛ اطلاعات کارت بانکی را در فرم سایت وارد نکن.";
       toggle.textContent = "حساب داری؟ وارد شو";
     }
   }
 
   function updateEnvironmentText() {
-    const hasAnyPaymentMethod = CONFIG.paymentsEnabled || CARD_TRANSFER_ENABLED;
     $("#siteModeLabel").textContent = DEMO_MODE ? "نسخه‌ی نمایشی بلوک‌کُد" : "باشگاه فرمان‌های بلوک‌کُد";
     $("#siteModeBadge").textContent = DEMO_MODE ? "آزمایشی" : "حساب سروری";
     $("#walletNote").textContent = DEMO_MODE
       ? "ⓘ  در نسخه‌ی نمایشی، حساب و موجودی فقط روی همین مرورگر ذخیره می‌شود."
       : "ⓘ  موجودی و رازهای بازشده در حساب سرور ذخیره می‌شوند.";
-    $("#buyButton").disabled = !DEMO_MODE && !hasAnyPaymentMethod;
+    $("#buyButton").disabled = !DEMO_MODE && !CARD_TRANSFER_ENABLED;
     $("#paymentNote").textContent = DEMO_MODE
       ? "▣  خرید بالا فقط نمایشی است؛ پولی دریافت نمی‌شود."
-      : CARD_TRANSFER_ENABLED && CONFIG.paymentsEnabled
-        ? "▣  خرید با زرین‌پال یا کارت‌به‌کارت ممکن است؛ سفارش کارت‌به‌کارت دستی بررسی می‌شود."
-        : CARD_TRANSFER_ENABLED
-          ? "▣  سفارش کارت‌به‌کارت پس از واریز ثبت و دستی بررسی می‌شود."
-          : CONFIG.paymentsEnabled
-            ? CONFIG.paymentSandbox
-              ? "▣  زرین‌پال در حالت آزمایشی است؛ پرداخت واقعی انجام نمی‌شود."
-              : "▣  پس از تأیید پرداخت، ۱۰ توکن به حسابت اضافه می‌شود."
-            : "▣  روش خرید هنوز توسط مدیر سایت فعال نشده است.";
-
-    $("#demoPurchaseButton").hidden = !DEMO_MODE;
-    $("#startPaymentButton").hidden = DEMO_MODE || !CONFIG.paymentsEnabled;
-    $("#cardTransferButton").hidden = DEMO_MODE || !CARD_TRANSFER_ENABLED;
-    $("#purchaseDescription").textContent = DEMO_MODE
-      ? "این نسخه خرید را فقط شبیه‌سازی می‌کند؛ هیچ پولی دریافت نمی‌شود."
-      : CARD_TRANSFER_ENABLED && CONFIG.paymentsEnabled
-        ? "برای خرید ۱۰ توکن به مبلغ ۱۰٬۰۰۰ تومان، زرین‌پال یا کارت‌به‌کارت را انتخاب کن. سفارش کارت‌به‌کارت دستی بررسی می‌شود."
-        : CARD_TRANSFER_ENABLED
-          ? "برای بسته‌ی ۱۰ توکن به مبلغ ۱۰٬۰۰۰ تومان، کارت‌به‌کارت کن و کد پیگیری را ثبت کن. سفارش دستی بررسی می‌شود."
-          : CONFIG.paymentSandbox
-          ? "با رفتن به درگاه آزمایشی، پرداخت واقعی انجام نمی‌شود. بعد از تأیید آزمایشی ۱۰ توکن به حسابت اضافه می‌شود."
-          : "با پرداخت ۱۰٬۰۰۰ تومان در زرین‌پال، پس از تأیید سرور ۱۰ توکن به حسابت اضافه می‌شود.";
-    $("#purchaseTitle").textContent = DEMO_MODE ? "۱۰ توکن آزمایشی" : "خرید ۱۰ توکن";
-    $("#purchaseFootnote").textContent = DEMO_MODE
-      ? "این دکمه فقط برای آزمایش نمونه‌کار است."
       : CARD_TRANSFER_ENABLED
-        ? "ثبت سفارش به‌تنهایی توکن اضافه نمی‌کند؛ بررسی و تأیید دستی لازم است."
-        : CONFIG.paymentSandbox ? "پرداخت در محیط آزمایشی زرین‌پال انجام می‌شود." : "تأیید پرداخت فقط از سمت سرور انجام می‌شود.";
+        ? "▣  پرداخت با کارت‌به‌کارت انجام می‌شود؛ سفارش پس از بررسی دستی تأیید خواهد شد."
+        : "▣  کارت‌به‌کارت هنوز توسط مدیر سایت فعال نشده است.";
+    $("#demoPurchaseButton").hidden = !DEMO_MODE;
+    $("#purchaseDescription").textContent = "این نسخه خرید را فقط شبیه‌سازی می‌کند؛ هیچ پولی دریافت نمی‌شود.";
+    $("#purchaseTitle").textContent = "۱۰ توکن آزمایشی";
+    $("#purchaseFootnote").textContent = "این دکمه فقط برای آزمایش نمونه‌کار است.";
   }
   function render() {
     const balance = numberFa(state.tokens);
@@ -446,26 +424,12 @@
       openAccountDialog();
       return;
     }
-    if (DEMO_MODE) {
-      state.tokens += 10;
-      saveDemoState();
-      closeDialog(purchaseDialog);
-      render();
-      showToast("۱۰ توکن تستی اضافه شد؛ پولی دریافت نشد.");
-      return;
-    }
-    if (!CONFIG.paymentsEnabled) return showToast("درگاه خرید هنوز فعال نشده است.");
-    const button = $("#startPaymentButton");
-    button.disabled = true;
-    try {
-      const payload = await api("/api/payments/create", { method: "POST", body: {} });
-      const redirect = new URL(payload.redirectUrl);
-      if (redirect.protocol !== "https:") throw new Error("نشانی امن درگاه دریافت نشد.");
-      window.location.assign(redirect.href);
-    } catch (error) {
-      button.disabled = false;
-      showToast(error.message);
-    }
+    if (!DEMO_MODE) return showToast("خرید آزمایشی فقط در نسخه‌ی نمایشی در دسترس است.");
+    state.tokens += 10;
+    saveDemoState();
+    closeDialog(purchaseDialog);
+    render();
+    showToast("۱۰ توکن تستی اضافه شد؛ پولی دریافت نشد.");
   }
 
   function formatCardNumber(value) {
@@ -507,18 +471,18 @@
     button.disabled = true;
     try {
       const formData = new FormData(form);
-      const payload = await api("/api/orders", {
+      const payload = await api("/api/payments/card-transfer", {
         method: "POST",
         body: {
           customer_contact: String(formData.get("customer_contact") || "").trim(),
-          tracking_code: String(formData.get("tracking_code") || "").trim()
+          payment_reference: String(formData.get("payment_reference") || "").trim()
         }
       });
       if (!payload.orderId) throw new Error("شناسه‌ی سفارش از سرور دریافت نشد.");
       form.reset();
       form.hidden = true;
       const result = $("#cardTransferResult");
-      result.textContent = "سفارش ثبت شد. شناسه‌ی پیگیری سایت: " + payload.orderId + ". وضعیت: در انتظار بررسی دستی؛ هنوز توکنی اضافه نشده است.";
+      result.textContent = "سفارش ثبت شد. شناسه‌ی سفارش: " + payload.orderId + ". پس از بررسی رسید، نتیجه اعلام می‌شود؛ هنوز توکنی اضافه نشده است.";
       result.hidden = false;
     } catch (error) {
       showToast(error.message);
@@ -530,20 +494,13 @@
   function handleReturnMessage() {
     const params = new URLSearchParams(window.location.search);
     const verified = params.get("verified");
-    const payment = params.get("payment");
-    if (!verified && !payment) return;
+    if (!verified) return;
     if (verified === "1") {
       setAuthMode("login");
       openAccountDialog();
       showToast("ایمیلت تأیید شد؛ حالا وارد حسابت شو.");
     } else if (verified === "invalid") {
       showToast("پیوند تأیید معتبر نیست یا مهلتش تمام شده است.");
-    } else if (payment === "success") {
-      refreshServerState().then(() => showToast("پرداخت تأیید شد و ۱۰ توکن به حسابت اضافه شد."));
-    } else if (payment === "cancelled") {
-      showToast("پرداخت انجام نشد؛ هیچ توکنی کم یا اضافه نشد.");
-    } else if (payment === "failed") {
-      showToast("تأیید پرداخت انجام نشد؛ اگر مبلغی از حسابت کم شده، رسید را نگه دار و با پشتیبانی درگاه پیگیری کن.");
     }
     window.history.replaceState({}, "", window.location.pathname + window.location.hash);
   }
@@ -558,17 +515,16 @@
   $("#dailyButton").addEventListener("click", claimDailyToken);
   $("#logoutButton").addEventListener("click", logout);
   $("#buyButton").addEventListener("click", () => {
-    if (!DEMO_MODE && !CONFIG.paymentsEnabled && !CARD_TRANSFER_ENABLED) return showToast("روش خرید هنوز برای این سایت فعال نشده است.");
+    if (!DEMO_MODE && !CARD_TRANSFER_ENABLED) return showToast("پرداخت کارت‌به‌کارت هنوز فعال نشده است.");
     if (!state.profile) {
       showToast("برای خرید اول وارد حسابت شو.");
       openAccountDialog();
       return;
     }
-    openDialog(purchaseDialog);
+    if (DEMO_MODE) openDialog(purchaseDialog);
+    else openCardTransferDialog();
   });
   $("#demoPurchaseButton").addEventListener("click", startPurchase);
-  $("#startPaymentButton").addEventListener("click", startPurchase);
-  $("#cardTransferButton").addEventListener("click", openCardTransferDialog);
   $("#copyCardNumberButton").addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(String(CONFIG.cardTransferCardNumber || "").replace(/\D/g, ""));

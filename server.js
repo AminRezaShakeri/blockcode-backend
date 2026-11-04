@@ -12,7 +12,6 @@ import { rateLimit } from "express-rate-limit";
 import helmet from "helmet";
 import nodemailer from "nodemailer";
 import pg from "pg";
-import { ZarinPal } from "zarinpal-node-sdk";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
@@ -25,15 +24,12 @@ const MAIL_MODE = process.env.MAIL_MODE || "console";
 const SMTP_URL = process.env.SMTP_URL || "";
 const SMTP_FROM = process.env.SMTP_FROM || "BlokCode <no-reply@example.com>";
 const ALLOW_DEVELOPMENT_VERIFICATION_LINKS = String(process.env.ALLOW_DEVELOPMENT_VERIFICATION_LINKS || "false").toLowerCase() === "true";
-const MERCHANT_ID = process.env.ZARINPAL_MERCHANT_ID || "";
-const PAYMENT_SANDBOX = String(process.env.ZARINPAL_SANDBOX || "true").toLowerCase() !== "false";
-const PAYMENTS_ENABLED = String(process.env.PAYMENTS_ENABLED || "false").toLowerCase() === "true" && Boolean(MERCHANT_ID);
 const CARD_TRANSFER_REQUESTED = String(process.env.CARD_TRANSFER_ENABLED || "false").toLowerCase() === "true";
 const CARD_TRANSFER_CARD_NUMBER = String(process.env.CARD_TRANSFER_CARD_NUMBER || "").replace(/\D/g, "");
 const CARD_TRANSFER_CARD_HOLDER = String(process.env.CARD_TRANSFER_CARD_HOLDER || "").trim();
-const CARD_TRANSFER_ENABLED = CARD_TRANSFER_REQUESTED && /^\d{16}$/.test(CARD_TRANSFER_CARD_NUMBER);
+const CARD_TRANSFER_ADMIN_TOKEN = String(process.env.CARD_TRANSFER_ADMIN_TOKEN || "").trim();
+const CARD_TRANSFER_ENABLED = CARD_TRANSFER_REQUESTED && /^\d{16}$/.test(CARD_TRANSFER_CARD_NUMBER) && CARD_TRANSFER_CARD_HOLDER.length > 0;
 const PRICE_TOMANS = 10_000;
-const PRICE_RIALS = PRICE_TOMANS * 10;
 const TOKENS_PER_PURCHASE = 10;
 const SESSION_DAYS = 30;
 const VERIFY_HOURS = 24;
@@ -221,6 +217,8 @@ function safeEqual(left, right) {
 
 function sameOriginWrite(req, res, next) {
   if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return next();
+  const adminBearer = (req.get("authorization") || "").match(/^Bearer\s+(.+)$/i)?.[1] || "";
+  if (req.originalUrl?.startsWith("/api/admin/card-transfer/orders/") && CARD_TRANSFER_ADMIN_TOKEN && adminBearer && safeEqual(adminBearer, CARD_TRANSFER_ADMIN_TOKEN)) return next();
   const origin = req.get("origin");
   if (!origin) return res.status(403).json({ error: "درخواست معتبر نیست؛ صفحه را دوباره باز کن." });
   try {
@@ -271,6 +269,18 @@ async function requireSession(req, res, next) {
   next();
 }
 
+function requireCardTransferAdmin(req, res, next) {
+  if (!CARD_TRANSFER_ADMIN_TOKEN) {
+    return res.status(503).json({ error: "کلید مدیریت سفارش‌ها در تنظیمات سرور تعریف نشده است." });
+  }
+  const authorization = req.get("authorization") || "";
+  const token = authorization.match(/^Bearer\s+(.+)$/i)?.[1] || "";
+  if (!token || !safeEqual(token, CARD_TRANSFER_ADMIN_TOKEN)) {
+    return res.status(401).json({ error: "دسترسی مدیریت سفارش‌ها مجاز نیست." });
+  }
+  next();
+}
+
 async function serializeAccount(account) {
   if (!account) return { authenticated: false };
   const userId = account.id ?? account.user_id;
@@ -314,11 +324,6 @@ async function clearSession(req, res) {
     sameSite: "lax",
     path: "/"
   });
-}
-
-function makeZarinPal() {
-  if (!MERCHANT_ID) throw new Error("شناسه پذیرنده زرین‌پال تنظیم نشده است.");
-  return new ZarinPal({ merchantId: MERCHANT_ID, sandbox: PAYMENT_SANDBOX });
 }
 
 async function sendVerification(email, name, rawToken) {
@@ -499,116 +504,85 @@ app.post("/api/secrets/:id/unlock", requireSession, async (req, res) => {
   res.json({ ...await serializeAccount(accountResult.rows[0]), message: "راز باز شد؛ حالا فرمانش را می‌بینی." });
 });
 
-app.post("/api/orders", requireSession, async (req, res) => {
+app.post(["/api/payments/card-transfer", "/api/orders"], requireSession, async (req, res) => {
   if (!CARD_TRANSFER_ENABLED) {
     return res.status(503).json({ error: "پرداخت کارت‌به‌کارت هنوز برای این سایت فعال نشده است." });
   }
   const customerContact = typeof req.body?.customer_contact === "string"
     ? req.body.customer_contact.trim()
     : "";
-  const trackingCode = typeof req.body?.tracking_code === "string"
-    ? req.body.tracking_code.trim()
-    : "";
+  const paymentReference = typeof req.body?.payment_reference === "string"
+    ? req.body.payment_reference.trim()
+    : typeof req.body?.tracking_code === "string" ? req.body.tracking_code.trim() : "";
   if (customerContact.length < 3 || customerContact.length > 120) {
     return res.status(400).json({ error: "راه تماس را بین ۳ تا ۱۲۰ نویسه وارد کن." });
   }
-  if (trackingCode.length < 4 || trackingCode.length > 120) {
-    return res.status(400).json({ error: "کد پیگیری انتقال را بین ۴ تا ۱۲۰ نویسه وارد کن." });
+  if (paymentReference.length < 4 || paymentReference.length > 120 || /[\u0000-\u001f\u007f]/.test(paymentReference)) {
+    return res.status(400).json({ error: "چهار رقم آخر کارت یا کد پیگیری معتبر را وارد کن." });
   }
 
   const orderId = crypto.randomUUID();
   await db.query("INSERT INTO public.orders (id, user_id, product_name, amount, customer_contact, tracking_code, status) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-    [orderId, req.account.user_id, "بستهٔ ۱۰ توکن", PRICE_TOMANS, customerContact, trackingCode, "pending"]);
+    [orderId, req.account.user_id, "بستهٔ ۱۰ توکن", PRICE_TOMANS, customerContact, paymentReference, "pending"]);
   res.status(201).json({
     orderId,
     status: "pending",
-    message: "سفارش ثبت شد و در انتظار بررسی دستی است؛ هنوز توکنی به حسابت اضافه نشده است."
+    message: "اطلاعات سفارش ثبت شد و پس از بررسی رسید، نتیجه اعلام می‌شود."
   });
 });
 
-app.post("/api/payments/create", requireSession, async (req, res) => {
-  if (!PAYMENTS_ENABLED) {
-    return res.status(503).json({ error: "پرداخت هنوز فعال نشده است. مدیر سایت باید شناسه پذیرنده را تنظیم کند." });
+app.get("/api/admin/card-transfer/orders", requireCardTransferAdmin, async (req, res) => {
+  const status = typeof req.query.status === "string" ? req.query.status : "pending";
+  const allowedStatuses = ["pending", "paid", "delivered", "rejected", "cancelled"];
+  if (!allowedStatuses.includes(status)) {
+    return res.status(400).json({ error: "وضعیت سفارش معتبر نیست." });
   }
-  const orderId = crypto.randomUUID();
-  const createdAt = now();
-  await db.query(`INSERT INTO payments (order_id, user_id, amount_rials, token_amount, status, created_at)
-    VALUES ($1, $2, $3, $4, 'pending', $5)`,
-  [orderId, req.account.user_id, PRICE_RIALS, TOKENS_PER_PURCHASE, createdAt]);
-
-  try {
-    const zarinpal = makeZarinPal();
-    const callbackUrl = `${APP_URL}/api/payments/callback`;
-    const payment = await zarinpal.payments.create({
-      amount: PRICE_RIALS,
-      currency: "IRR",
-      callback_url: callbackUrl,
-      description: `خرید ${TOKENS_PER_PURCHASE} توکن بلوک‌کُد - ${orderId.slice(0, 8)}`,
-      email: req.account.email
-    });
-    const data = payment?.data;
-    const authority = data?.authority;
-    if (Number(data?.code) !== 100 || typeof authority !== "string" || authority.length > 128) {
-      throw new Error("درگاه درخواست پرداخت را نپذیرفت.");
-    }
-    await db.query("UPDATE payments SET authority = $1 WHERE order_id = $2", [authority, orderId]);
-    const redirectUrl = await zarinpal.payments.getRedirectUrl(authority);
-    res.json({ redirectUrl });
-  } catch (error) {
-    await db.query("UPDATE payments SET status = 'failed' WHERE order_id = $1 AND status = 'pending'", [orderId]);
-    console.error("ZarinPal request failed:", error.message);
-    res.status(502).json({ error: "اتصال به زرین‌پال انجام نشد. چند دقیقه دیگر دوباره تلاش کن." });
-  }
+  const requestedLimit = Number.parseInt(String(req.query.limit || "50"), 10);
+  const limit = Number.isFinite(requestedLimit) ? Math.min(100, Math.max(1, requestedLimit)) : 50;
+  const result = await db.query(`
+    SELECT o.id, o.user_id, u.email, o.created_at, o.product_name, o.amount,
+      o.customer_contact, o.tracking_code, o.status
+    FROM public.orders o
+    LEFT JOIN users u ON u.id = o.user_id
+    WHERE o.status = $1
+    ORDER BY o.created_at DESC
+    LIMIT $2
+  `, [status, limit]);
+  res.json({ orders: result.rows });
 });
 
-app.get("/api/payments/callback", async (req, res) => {
-  const status = typeof req.query.Status === "string" ? req.query.Status : "";
-  const authority = typeof req.query.Authority === "string" ? req.query.Authority : "";
-  if (!authority || authority.length > 128) return res.redirect(303, "/?payment=failed");
-  const orderResult = await db.query("SELECT * FROM payments WHERE authority = $1", [authority]);
-  const order = orderResult.rows[0];
-  if (!order) return res.redirect(303, "/?payment=failed");
-  if (order.status === "paid") return res.redirect(303, "/?payment=success");
-  if (status !== "OK" || order.status !== "pending") {
-    await db.query("UPDATE payments SET status = 'cancelled' WHERE id = $1 AND status = 'pending'", [order.id]);
-    return res.redirect(303, "/?payment=cancelled");
+app.post("/api/admin/card-transfer/orders/:orderId/approve", requireCardTransferAdmin, async (req, res) => {
+  const orderId = String(req.params.orderId || "");
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(orderId)) {
+    return res.status(400).json({ error: "شناسهٔ سفارش معتبر نیست." });
   }
 
-  try {
-    const zarinpal = makeZarinPal();
-    const verification = await zarinpal.verifications.verify({
-      amount: Number(order.amount_rials),
-      authority
-    });
-    const data = verification?.data;
-    const code = Number(data?.code);
-    if (code !== 100 && code !== 101) {
-      await db.query("UPDATE payments SET status = 'failed' WHERE id = $1 AND status = 'pending'", [order.id]);
-      return res.redirect(303, "/?payment=failed");
-    }
+  const outcome = await withTransaction(async (client) => {
+    const orderResult = await client.query("SELECT id, user_id, product_name, amount, status FROM public.orders WHERE id = $1 FOR UPDATE", [orderId]);
+    const order = orderResult.rows[0];
+    if (!order) return { kind: "not_found" };
+    if (order.status !== "pending") return { kind: "not_pending", status: order.status };
+    if (order.product_name !== "بستهٔ ۱۰ توکن" || Number(order.amount) !== PRICE_TOMANS) return { kind: "invalid_order" };
 
-    const refId = data?.ref_id == null ? null : String(data.ref_id);
-    await withTransaction(async (client) => {
-      const pendingOrder = await client.query("SELECT status FROM payments WHERE id = $1 FOR UPDATE", [order.id]);
-      if (pendingOrder.rows[0]?.status !== "pending") return;
-      await client.query("UPDATE payments SET status = 'paid', ref_id = $1, verified_at = $2 WHERE id = $3",
-        [refId, now(), order.id]);
-      await client.query("UPDATE users SET token_balance = token_balance + $1 WHERE id = $2",
-        [Number(order.token_amount), order.user_id]);
-    });
-    res.redirect(303, "/?payment=success");
-  } catch (error) {
-    console.error("ZarinPal verification failed:", error.message);
-    res.redirect(303, "/?payment=failed");
-  }
+    const creditResult = await client.query("UPDATE users SET token_balance = token_balance + $1 WHERE id = $2 RETURNING token_balance",
+      [TOKENS_PER_PURCHASE, order.user_id]);
+    if (!creditResult.rows[0]) return { kind: "missing_user" };
+    const updateResult = await client.query("UPDATE public.orders SET status = 'delivered' WHERE id = $1 AND status = 'pending'", [orderId]);
+    if (updateResult.rowCount !== 1) throw new Error("Card-transfer order changed while it was being approved.");
+    return { kind: "approved", tokenBalance: creditResult.rows[0].token_balance };
+  });
+
+  if (outcome.kind === "not_found") return res.status(404).json({ error: "سفارش پیدا نشد." });
+  if (outcome.kind === "not_pending") return res.status(409).json({ error: "این سفارش قبلاً بررسی شده است.", status: outcome.status });
+  if (outcome.kind === "invalid_order") return res.status(409).json({ error: "مبلغ یا محصول سفارش با بستهٔ توکن سازگار نیست." });
+  if (outcome.kind === "missing_user") return res.status(409).json({ error: "حساب ثبت‌شده برای این سفارش پیدا نشد." });
+  res.json({ orderId, status: "delivered", tokensAdded: TOKENS_PER_PURCHASE, tokenBalance: outcome.tokenBalance });
 });
 
 app.get("/config.js", (_req, res) => {
   res.type("application/javascript").set("Cache-Control", "no-store").send(
     `window.BLOKCODE_CONFIG = ${JSON.stringify({
       demoMode: false,
-      paymentsEnabled: PAYMENTS_ENABLED,
-      paymentSandbox: PAYMENT_SANDBOX,
       cardTransferEnabled: CARD_TRANSFER_ENABLED,
       cardTransferCardNumber: CARD_TRANSFER_ENABLED ? CARD_TRANSFER_CARD_NUMBER : "",
       cardTransferCardHolder: CARD_TRANSFER_ENABLED ? CARD_TRANSFER_CARD_HOLDER : ""
@@ -637,6 +611,6 @@ await initializeDatabase();
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`BlokCode server is running at ${APP_URL}`);
-  console.log(`Payments: ${PAYMENTS_ENABLED ? (PAYMENT_SANDBOX ? "sandbox" : "live") : "disabled"}`);
+  console.log(`Card transfer: ${CARD_TRANSFER_ENABLED ? "enabled" : "disabled"}`);
   console.log(`Email: ${MAIL_MODE}`);
 });
