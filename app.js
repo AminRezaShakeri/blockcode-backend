@@ -1,8 +1,9 @@
 (() => {
   "use strict";
 
-  const CONFIG = window.BLOKCODE_CONFIG || { demoMode: true, paymentsEnabled: false, paymentSandbox: true };
+  const CONFIG = window.BLOKCODE_CONFIG || { demoMode: true, paymentsEnabled: false, paymentSandbox: true, cardTransferEnabled: false };
   const DEMO_MODE = CONFIG.demoMode !== false;
+  const CARD_TRANSFER_ENABLED = CONFIG.cardTransferEnabled === true;
   const STORAGE_KEY = "blokcode-demo-v1";
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -10,6 +11,7 @@
   const SECRET_IDS = new Set(SECRET_CARDS.map((card) => card.dataset.secret).filter(Boolean));
   const accountDialog = $("#accountDialog");
   const purchaseDialog = $("#purchaseDialog");
+  const cardTransferDialog = $("#cardTransferDialog");
   const toast = $("#toast");
   let state = DEMO_MODE ? readDemoState() : emptyState();
   let toastTimer;
@@ -169,34 +171,44 @@
   }
 
   function updateEnvironmentText() {
+    const hasAnyPaymentMethod = CONFIG.paymentsEnabled || CARD_TRANSFER_ENABLED;
     $("#siteModeLabel").textContent = DEMO_MODE ? "نسخه‌ی نمایشی بلوک‌کُد" : "باشگاه فرمان‌های بلوک‌کُد";
     $("#siteModeBadge").textContent = DEMO_MODE ? "آزمایشی" : "حساب سروری";
     $("#walletNote").textContent = DEMO_MODE
       ? "ⓘ  در نسخه‌ی نمایشی، حساب و موجودی فقط روی همین مرورگر ذخیره می‌شود."
       : "ⓘ  موجودی و رازهای بازشده در حساب سرور ذخیره می‌شوند.";
-    const buyButton = $("#buyButton");
-    buyButton.disabled = !DEMO_MODE && !CONFIG.paymentsEnabled;
+    $("#buyButton").disabled = !DEMO_MODE && !hasAnyPaymentMethod;
     $("#paymentNote").textContent = DEMO_MODE
       ? "▣  خرید بالا فقط نمایشی است؛ پولی دریافت نمی‌شود."
-      : !CONFIG.paymentsEnabled
-        ? "▣  خرید پس از تنظیم پذیرنده‌ی زرین‌پال توسط مدیر سایت فعال می‌شود."
-        : CONFIG.paymentSandbox
-          ? "▣  زرین‌پال در حالت آزمایشی است؛ پرداخت واقعی انجام نمی‌شود."
-          : "▣  پس از تأیید پرداخت، ۱۰ توکن به حسابت اضافه می‌شود.";
+      : CARD_TRANSFER_ENABLED && CONFIG.paymentsEnabled
+        ? "▣  خرید با زرین‌پال یا کارت‌به‌کارت ممکن است؛ سفارش کارت‌به‌کارت دستی بررسی می‌شود."
+        : CARD_TRANSFER_ENABLED
+          ? "▣  سفارش کارت‌به‌کارت پس از واریز ثبت و دستی بررسی می‌شود."
+          : CONFIG.paymentsEnabled
+            ? CONFIG.paymentSandbox
+              ? "▣  زرین‌پال در حالت آزمایشی است؛ پرداخت واقعی انجام نمی‌شود."
+              : "▣  پس از تأیید پرداخت، ۱۰ توکن به حسابت اضافه می‌شود."
+            : "▣  روش خرید هنوز توسط مدیر سایت فعال نشده است.";
 
     $("#demoPurchaseButton").hidden = !DEMO_MODE;
     $("#startPaymentButton").hidden = DEMO_MODE || !CONFIG.paymentsEnabled;
+    $("#cardTransferButton").hidden = DEMO_MODE || !CARD_TRANSFER_ENABLED;
     $("#purchaseDescription").textContent = DEMO_MODE
       ? "این نسخه خرید را فقط شبیه‌سازی می‌کند؛ هیچ پولی دریافت نمی‌شود."
-      : CONFIG.paymentSandbox
-        ? "با رفتن به درگاه آزمایشی، پرداخت واقعی انجام نمی‌شود. بعد از تأیید آزمایشی ۱۰ توکن به حسابت اضافه می‌شود."
-        : "با پرداخت ۱۰٬۰۰۰ تومان در زرین‌پال، پس از تأیید سرور ۱۰ توکن به حسابت اضافه می‌شود.";
+      : CARD_TRANSFER_ENABLED && CONFIG.paymentsEnabled
+        ? "برای خرید ۱۰ توکن به مبلغ ۱۰٬۰۰۰ تومان، زرین‌پال یا کارت‌به‌کارت را انتخاب کن. سفارش کارت‌به‌کارت دستی بررسی می‌شود."
+        : CARD_TRANSFER_ENABLED
+          ? "برای بسته‌ی ۱۰ توکن به مبلغ ۱۰٬۰۰۰ تومان، کارت‌به‌کارت کن و کد پیگیری را ثبت کن. سفارش دستی بررسی می‌شود."
+          : CONFIG.paymentSandbox
+          ? "با رفتن به درگاه آزمایشی، پرداخت واقعی انجام نمی‌شود. بعد از تأیید آزمایشی ۱۰ توکن به حسابت اضافه می‌شود."
+          : "با پرداخت ۱۰٬۰۰۰ تومان در زرین‌پال، پس از تأیید سرور ۱۰ توکن به حسابت اضافه می‌شود.";
     $("#purchaseTitle").textContent = DEMO_MODE ? "۱۰ توکن آزمایشی" : "خرید ۱۰ توکن";
     $("#purchaseFootnote").textContent = DEMO_MODE
       ? "این دکمه فقط برای آزمایش نمونه‌کار است."
-      : CONFIG.paymentSandbox ? "پرداخت در محیط آزمایشی زرین‌پال انجام می‌شود." : "تأیید پرداخت فقط از سمت سرور انجام می‌شود.";
+      : CARD_TRANSFER_ENABLED
+        ? "ثبت سفارش به‌تنهایی توکن اضافه نمی‌کند؛ بررسی و تأیید دستی لازم است."
+        : CONFIG.paymentSandbox ? "پرداخت در محیط آزمایشی زرین‌پال انجام می‌شود." : "تأیید پرداخت فقط از سمت سرور انجام می‌شود.";
   }
-
   function render() {
     const balance = numberFa(state.tokens);
     $("#headerTokenCount").textContent = balance;
@@ -456,6 +468,65 @@
     }
   }
 
+  function formatCardNumber(value) {
+    return String(value || "").replace(/\D/g, "").replace(/(.{4})/g, "$1 ").trim();
+  }
+
+  function openCardTransferDialog() {
+    if (!state.profile) {
+      closeDialog(purchaseDialog);
+      showToast("برای خرید اول وارد حسابت شو.");
+      openAccountDialog();
+      return;
+    }
+    if (!CARD_TRANSFER_ENABLED || !CONFIG.cardTransferCardNumber) {
+      showToast("پرداخت کارت‌به‌کارت هنوز فعال نشده است.");
+      return;
+    }
+    $("#cardTransferCardNumber").textContent = formatCardNumber(CONFIG.cardTransferCardNumber);
+    const holder = String(CONFIG.cardTransferCardHolder || "").trim();
+    $("#cardTransferCardHolder").textContent = holder;
+    $("#cardTransferHolderRow").hidden = !holder;
+    $("#cardTransferForm").reset();
+    $("#cardTransferForm").hidden = false;
+    $("#cardTransferResult").hidden = true;
+    closeDialog(purchaseDialog);
+    openDialog(cardTransferDialog);
+  }
+
+  async function submitCardTransferOrder(event) {
+    event.preventDefault();
+    if (!state.profile) {
+      closeDialog(cardTransferDialog);
+      showToast("برای ثبت سفارش اول وارد حسابت شو.");
+      openAccountDialog();
+      return;
+    }
+    const form = $("#cardTransferForm");
+    const button = $("#submitCardTransferButton");
+    button.disabled = true;
+    try {
+      const formData = new FormData(form);
+      const payload = await api("/api/orders", {
+        method: "POST",
+        body: {
+          customer_contact: String(formData.get("customer_contact") || "").trim(),
+          tracking_code: String(formData.get("tracking_code") || "").trim()
+        }
+      });
+      if (!payload.orderId) throw new Error("شناسه‌ی سفارش از سرور دریافت نشد.");
+      form.reset();
+      form.hidden = true;
+      const result = $("#cardTransferResult");
+      result.textContent = "سفارش ثبت شد. شناسه‌ی پیگیری سایت: " + payload.orderId + ". وضعیت: در انتظار بررسی دستی؛ هنوز توکنی اضافه نشده است.";
+      result.hidden = false;
+    } catch (error) {
+      showToast(error.message);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
   function handleReturnMessage() {
     const params = new URLSearchParams(window.location.search);
     const verified = params.get("verified");
@@ -487,7 +558,7 @@
   $("#dailyButton").addEventListener("click", claimDailyToken);
   $("#logoutButton").addEventListener("click", logout);
   $("#buyButton").addEventListener("click", () => {
-    if (!DEMO_MODE && !CONFIG.paymentsEnabled) return showToast("درگاه زرین‌پال هنوز برای این سایت تنظیم نشده است.");
+    if (!DEMO_MODE && !CONFIG.paymentsEnabled && !CARD_TRANSFER_ENABLED) return showToast("روش خرید هنوز برای این سایت فعال نشده است.");
     if (!state.profile) {
       showToast("برای خرید اول وارد حسابت شو.");
       openAccountDialog();
@@ -497,6 +568,16 @@
   });
   $("#demoPurchaseButton").addEventListener("click", startPurchase);
   $("#startPaymentButton").addEventListener("click", startPurchase);
+  $("#cardTransferButton").addEventListener("click", openCardTransferDialog);
+  $("#copyCardNumberButton").addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(String(CONFIG.cardTransferCardNumber || "").replace(/\D/g, ""));
+      showToast("شماره کارت کپی شد.");
+    } catch (_) {
+      showToast("کپی خودکار در این مرورگر در دسترس نیست؛ شماره کارت را دستی انتخاب کن.");
+    }
+  });
+  $("#cardTransferForm").addEventListener("submit", submitCardTransferOrder);
 
   $$(".unlock-button").forEach((button) => button.addEventListener("click", () => {
     const card = button.closest(".secret-card[data-secret]");
@@ -508,7 +589,7 @@
     if (code) copyCommand(code.textContent.trim(), button);
   }));
   $$('[data-close]').forEach((button) => button.addEventListener("click", () => closeDialog(button.closest("dialog"))));
-  [accountDialog, purchaseDialog].forEach((dialog) => dialog.addEventListener("click", (event) => {
+  [accountDialog, purchaseDialog, cardTransferDialog].forEach((dialog) => dialog.addEventListener("click", (event) => {
     if (event.target === dialog) closeDialog(dialog);
   }));
 
