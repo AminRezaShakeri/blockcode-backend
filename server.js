@@ -16,6 +16,7 @@ import pg from "pg";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
 const NODE_ENV = process.env.NODE_ENV || "development";
+const DEMO_MODE = String(process.env.DEMO_MODE || "false").trim().toLowerCase() === "true";
 const APP_URL = (process.env.APP_URL || `http://localhost:${PORT}`).replace(/\/$/, "");
 const DATABASE_URL = process.env.DATABASE_URL || "";
 const DATABASE_SSL = String(process.env.DATABASE_SSL ?? "true").toLowerCase() !== "false";
@@ -50,42 +51,98 @@ if (NODE_ENV === "production" && ALLOW_DEVELOPMENT_VERIFICATION_LINKS) {
 }
 
 const { Pool } = pg;
-if (!DATABASE_URL) {
-  throw new Error("DATABASE_URL تنظیم نشده است؛ آدرس اتصال Supabase را در Environment سرور قرار بده.");
-}
 
-let databaseUrl;
-try {
-  databaseUrl = new URL(DATABASE_URL);
-} catch {
-  throw new Error("DATABASE_URL باید URI کامل PostgreSQL باشد؛ مقدار خام در لاگ ثبت نشد.");
-}
-if (!["postgres:", "postgresql:"].includes(databaseUrl.protocol)) {
-  throw new Error("DATABASE_URL باید یک نشانی PostgreSQL معتبر باشد.");
-}
-if (["sslcert", "sslkey", "sslrootcert"].some((key) => databaseUrl.searchParams.has(key))) {
-  throw new Error("برای اتصال از گواهی SSL سفارشی، تنظیمات گواهی را جداگانه پیکربندی کن.");
-}
-// pg's connection-string parser can override the Pool SSL options when sslmode is present.
-// Apply TLS explicitly so certificate verification remains enabled.
-databaseUrl.searchParams.delete("sslmode");
-const databaseSsl = DATABASE_SSL
-  ? {
+function buildDatabasePoolOptions(value) {
+  const connectionString = String(value || "").trim();
+  if (!connectionString) return null;
+
+  let normalizedConnectionString = connectionString;
+  let hasCertificateOptions = false;
+  let hasConnectionStringSslOptions = /(?:^|\s)(?:sslmode|sslcert|sslkey|sslrootcert)\s*=/i.test(connectionString);
+
+  if (/^(?:postgres|postgresql):\/\//i.test(connectionString)) {
+    let parsedUrl;
+    try {
+      parsedUrl = new URL(connectionString);
+    } catch {
+      return null;
+    }
+    if (!parsedUrl.hostname) return null;
+
+    hasCertificateOptions = ["sslcert", "sslkey", "sslrootcert"]
+      .some((key) => parsedUrl.searchParams.has(key));
+    hasConnectionStringSslOptions = hasCertificateOptions || parsedUrl.searchParams.has("sslmode");
+
+    // Keep pg's connection-string parsing simple while applying the configured TLS policy.
+    if (DATABASE_SSL && !hasCertificateOptions && parsedUrl.searchParams.has("sslmode")) {
+      parsedUrl.searchParams.delete("sslmode");
+      normalizedConnectionString = parsedUrl.toString();
+      hasConnectionStringSslOptions = false;
+    }
+  } else if (!/(?:^|\s)host\s*=/i.test(connectionString)) {
+    // pg accepts libpq-style key/value strings too. A bare password or unrelated
+    // environment value is not a usable connection string.
+    return null;
+  }
+
+  const options = {
+    connectionString: normalizedConnectionString,
+    max: 4,
+    idleTimeoutMillis: 10_000,
+    connectionTimeoutMillis: 10_000
+  };
+
+  if (!DATABASE_SSL) {
+    options.ssl = false;
+  } else if (!hasConnectionStringSslOptions) {
+    options.ssl = {
       rejectUnauthorized: true,
       ...(DATABASE_SSL_CA ? { ca: DATABASE_SSL_CA.replace(/\\n/g, "\n") } : {})
-    }
-  : false;
-const db = new Pool({
-  connectionString: databaseUrl.toString(),
-  ssl: databaseSsl,
-  max: 4,
-  idleTimeoutMillis: 10_000,
-  connectionTimeoutMillis: 10_000
-});
-db.on("error", (error) => console.error("Unexpected PostgreSQL pool error:", error.message));
+    };
+  }
 
+  return options;
+}
+
+let db = null;
+let databaseReady = false;
+
+function safeDatabaseErrorCode(error) {
+  const code = typeof error?.code === "string" ? error.code : "";
+  return /^[A-Z0-9_]{1,16}$/.test(code) ? code : "";
+}
+
+function reportDatabaseUnavailable(stage, error) {
+  databaseReady = false;
+  const code = safeDatabaseErrorCode(error);
+  console.error(
+    "[database] " + stage + " failed; database-backed API routes return HTTP 503." +
+    (code ? " Code: " + code : "")
+  );
+}
+
+function isDatabaseError(error) {
+  const code = typeof error?.code === "string" ? error.code : "";
+  return /^[A-Z0-9]{5}$/.test(code) ||
+    /^(ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EHOSTUNREACH|EAI_AGAIN)$/.test(code) ||
+    Boolean(error?.severity);
+}
+
+const databasePoolOptions = buildDatabasePoolOptions(DATABASE_URL);
+if (databasePoolOptions) {
+  try {
+    db = new Pool(databasePoolOptions);
+    db.on("error", (error) => reportDatabaseUnavailable("connection pool", error));
+  } catch (error) {
+    reportDatabaseUnavailable("connection pool setup", error);
+  }
+} else {
+  console.warn("[database] DATABASE_URL is missing or unusable; server is starting with database APIs disabled.");
+}
 async function initializeDatabase() {
-  await db.query(`
+  if (!db) return false;
+  try {
+    await db.query(`
   CREATE TABLE IF NOT EXISTS users (
     id BIGSERIAL PRIMARY KEY,
     email TEXT NOT NULL UNIQUE,
@@ -151,7 +208,13 @@ async function initializeDatabase() {
   CREATE INDEX IF NOT EXISTS orders_tracking_code_idx ON public.orders (tracking_code) WHERE tracking_code IS NOT NULL;
   CREATE INDEX IF NOT EXISTS orders_user_created_at_idx ON public.orders (user_id, created_at DESC);
   ALTER TABLE public.orders ENABLE ROW LEVEL SECURITY;
-  `);
+    `);
+    databaseReady = true;
+    return true;
+  } catch (error) {
+    reportDatabaseUnavailable("schema initialization", error);
+    return false;
+  }
 }
 
 const html = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
@@ -355,10 +418,31 @@ function escapeHtml(value) {
 }
 
 app.use("/api", writeLimiter, sameOriginWrite);
+app.use("/api", (req, res, next) => {
+  if (req.path === "/health" || databaseReady) return next();
+  return res.status(503).json({
+    error: DEMO_MODE
+      ? "نسخه‌ی نمایشی فعال است؛ عملیات حساب کاربری و سفارش‌ها در دسترس نیست."
+      : "پایگاه‌داده در دسترس نیست؛ عملیات حساب کاربری و سفارش‌ها موقتاً غیرفعال است."
+  });
+});
 
 app.get("/api/health", async (_req, res) => {
-  await db.query("SELECT 1");
-  res.json({ ok: true });
+  if (!databaseReady) {
+    const initialized = await initializeDatabase();
+    if (!initialized) {
+      return res.status(503).json({ ok: false, database: "unavailable" });
+    }
+  }
+
+  try {
+    await db.query("SELECT 1");
+    databaseReady = true;
+    return res.json({ ok: true, database: "connected" });
+  } catch (error) {
+    reportDatabaseUnavailable("health check", error);
+    return res.status(503).json({ ok: false, database: "unavailable" });
+  }
 });
 
 app.get("/api/me", async (req, res) => {
@@ -587,10 +671,10 @@ app.post("/api/admin/card-transfer/orders/:orderId/approve", requireCardTransfer
 app.get("/config.js", (_req, res) => {
   res.type("application/javascript").set("Cache-Control", "no-store").send(
     `window.BLOKCODE_CONFIG = ${JSON.stringify({
-      demoMode: false,
-      cardTransferEnabled: CARD_TRANSFER_ENABLED,
-      cardTransferCardNumber: CARD_TRANSFER_ENABLED ? CARD_TRANSFER_CARD_NUMBER : "",
-      cardTransferCardHolder: CARD_TRANSFER_ENABLED ? CARD_TRANSFER_CARD_HOLDER : ""
+      demoMode: DEMO_MODE,
+      cardTransferEnabled: !DEMO_MODE && databaseReady && CARD_TRANSFER_ENABLED,
+      cardTransferCardNumber: !DEMO_MODE && databaseReady && CARD_TRANSFER_ENABLED ? CARD_TRANSFER_CARD_NUMBER : "",
+      cardTransferCardHolder: !DEMO_MODE && databaseReady && CARD_TRANSFER_ENABLED ? CARD_TRANSFER_CARD_HOLDER : ""
     })};`
   );
 });
@@ -607,15 +691,28 @@ app.use("/assets", express.static(path.join(__dirname, "assets"), staticOptions)
 app.use((_req, res) => res.status(404).json({ error: "این نشانی پیدا نشد." }));
 
 app.use((error, _req, res, _next) => {
+  if (isDatabaseError(error)) {
+    reportDatabaseUnavailable("request", error);
+    if (res.headersSent) return;
+    return res.status(503).json({
+      error: "پایگاه‌داده موقتاً در دسترس نیست. چند لحظه دیگر دوباره تلاش کن."
+    });
+  }
+
   console.error("Request failed:", error.message);
   if (res.headersSent) return;
   res.status(500).json({ error: "خطای داخلی رخ داد. دوباره تلاش کن." });
 });
 
-await initializeDatabase();
+const databaseInitialized = await initializeDatabase();
+if (!databaseInitialized) {
+  console.warn("[startup] Static pages are available; database-backed APIs return HTTP 503 until PostgreSQL is configured and reachable.");
+}
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`BlokCode server is running at ${APP_URL}`);
-  console.log(`Card transfer: ${CARD_TRANSFER_ENABLED ? "enabled" : "disabled"}`);
-  console.log(`Email: ${MAIL_MODE}`);
+  console.log("Card transfer: " + (databaseReady && !DEMO_MODE && CARD_TRANSFER_ENABLED ? "enabled" : "disabled"));
+  console.log("Database: " + (databaseReady ? "connected" : "unavailable"));
+  console.log("Demo mode: " + (DEMO_MODE ? "enabled" : "disabled"));
+  console.log("Email: " + MAIL_MODE);
 });
