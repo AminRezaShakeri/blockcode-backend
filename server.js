@@ -54,7 +54,12 @@ if (!DATABASE_URL) {
   throw new Error("DATABASE_URL تنظیم نشده است؛ آدرس اتصال Supabase را در Environment سرور قرار بده.");
 }
 
-const databaseUrl = new URL(DATABASE_URL);
+let databaseUrl;
+try {
+  databaseUrl = new URL(DATABASE_URL);
+} catch {
+  throw new Error("DATABASE_URL باید URI کامل PostgreSQL باشد؛ مقدار خام در لاگ ثبت نشد.");
+}
 if (!["postgres:", "postgresql:"].includes(databaseUrl.protocol)) {
   throw new Error("DATABASE_URL باید یک نشانی PostgreSQL معتبر باشد.");
 }
