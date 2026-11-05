@@ -50,15 +50,11 @@ if (NODE_ENV === "production" && ALLOW_DEVELOPMENT_VERIFICATION_LINKS) {
   console.warn("Demo mode: verification links are shown to the registering user instead of being emailed.");
 }
 
-const { Pool } = pg;
-
 function buildDatabasePoolOptions(value) {
   const connectionString = String(value || "").trim();
   if (!connectionString) return null;
 
   let normalizedConnectionString = connectionString;
-  let hasCertificateOptions = false;
-  let hasConnectionStringSslOptions = /(?:^|\s)(?:sslmode|sslcert|sslkey|sslrootcert)\s*=/i.test(connectionString);
 
   if (/^(?:postgres|postgresql):\/\//i.test(connectionString)) {
     let parsedUrl;
@@ -69,16 +65,11 @@ function buildDatabasePoolOptions(value) {
     }
     if (!parsedUrl.hostname) return null;
 
-    hasCertificateOptions = ["sslcert", "sslkey", "sslrootcert"]
-      .some((key) => parsedUrl.searchParams.has(key));
-    hasConnectionStringSslOptions = hasCertificateOptions || parsedUrl.searchParams.has("sslmode");
-
-    // Keep pg's connection-string parsing simple while applying the configured TLS policy.
-    if (DATABASE_SSL && !hasCertificateOptions && parsedUrl.searchParams.has("sslmode")) {
-      parsedUrl.searchParams.delete("sslmode");
-      normalizedConnectionString = parsedUrl.toString();
-      hasConnectionStringSslOptions = false;
+    // Apply the Pool's explicit TLS settings instead of connection-string overrides.
+    for (const key of ["sslmode", "sslcert", "sslkey", "sslrootcert"]) {
+      parsedUrl.searchParams.delete(key);
     }
+    normalizedConnectionString = parsedUrl.toString();
   } else if (!/(?:^|\s)host\s*=/i.test(connectionString)) {
     // pg accepts libpq-style key/value strings too. A bare password or unrelated
     // environment value is not a usable connection string.
@@ -94,9 +85,9 @@ function buildDatabasePoolOptions(value) {
 
   if (!DATABASE_SSL) {
     options.ssl = false;
-  } else if (!hasConnectionStringSslOptions) {
+  } else {
     options.ssl = {
-      rejectUnauthorized: true,
+      rejectUnauthorized: false,
       ...(DATABASE_SSL_CA ? { ca: DATABASE_SSL_CA.replace(/\\n/g, "\n") } : {})
     };
   }
@@ -131,7 +122,7 @@ function isDatabaseError(error) {
 const databasePoolOptions = buildDatabasePoolOptions(DATABASE_URL);
 if (databasePoolOptions) {
   try {
-    db = new Pool(databasePoolOptions);
+    db = new pg.Pool(databasePoolOptions);
     db.on("error", (error) => reportDatabaseUnavailable("connection pool", error));
   } catch (error) {
     reportDatabaseUnavailable("connection pool setup", error);
@@ -210,6 +201,7 @@ async function initializeDatabase() {
   ALTER TABLE public.orders ENABLE ROW LEVEL SECURITY;
     `);
     databaseReady = true;
+    console.log("Connected to PostgreSQL/Supabase successfully");
     return true;
   } catch (error) {
     reportDatabaseUnavailable("schema initialization", error);
