@@ -2,11 +2,109 @@
   "use strict";
 
   const CONFIG = window.BLOKCODE_CONFIG || { demoMode: true, cardTransferEnabled: false };
+  const I18N = window.BLOKCODE_I18N || { text: {}, commands: [], secrets: {}, messages: {} };
   const DEMO_MODE = CONFIG.demoMode !== false;
   const CARD_TRANSFER_ENABLED = CONFIG.cardTransferEnabled === true;
   const STORAGE_KEY = "blokcode-demo-v1";
+  const LANGUAGE_STORAGE_KEY = "blokcode-language-v1";
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
+  function readLanguage() {
+    try { return localStorage.getItem(LANGUAGE_STORAGE_KEY) === "en" ? "en" : "fa"; }
+    catch (_) { return "fa"; }
+  }
+  let currentLanguage = readLanguage();
+  function t(key, values = {}) {
+    const entry = I18N.text?.[key];
+    let value = entry?.[currentLanguage] || entry?.fa || key;
+    return value.replace(/\{(\w+)\}/g, (_, name) => String(values[name] ?? `{${name}}`));
+  }
+  function localizedMessage(message) {
+    if (currentLanguage !== "en" || typeof message !== "string") return message;
+    const entries = Object.entries(I18N.text || {})
+      .filter(([, entry]) => entry?.fa && entry?.en)
+      .map(([, entry]) => [entry.fa, entry.en]);
+    entries.push(...Object.entries(I18N.messages || {}));
+    for (const [fa, en] of entries) {
+      const names = [];
+      const marked = fa.replace(/\{(\w+)\}/g, (_, name) => {
+        names.push(name);
+        return `__BLOCKCODE_${names.length - 1}__`;
+      });
+      const source = marked.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/__BLOCKCODE_\d+__/g, "(.+?)");
+      const match = message.match(new RegExp("^" + source + "$"));
+      if (match) {
+        const values = Object.fromEntries(names.map((name, index) => [name, match[index + 1]]));
+        return en.replace(/\{(\w+)\}/g, (_, name) => values[name] ?? "");
+      }
+    }
+    return message;
+  }
+  function applyCommandTranslation(card, key) {
+    const index = Number(key.split(".")[1]) - 1;
+    const entry = I18N.commands?.[index];
+    if (!entry) return;
+    const english = currentLanguage === "en";
+    const top = $(".card-top", card);
+    const category = top && Array.from(top.childNodes).find((node) => node.nodeType === Node.TEXT_NODE && node.textContent.trim());
+    if (category) category.textContent = ` ${entry[english ? 1 : 0]} `;
+    $("h3", card).textContent = entry[english ? 3 : 2];
+    $("p", card).textContent = entry[english ? 5 : 4];
+    const foot = $(".card-foot", card);
+    const player = foot.querySelector("bdi");
+    foot.textContent = entry[english ? 7 : 6];
+    if (player) foot.append(" ", player);
+    if (index === 22) $("code", card).textContent = english ? "/say Hello, world!" : "/say سلام دنیا!";
+    $(".copy-button", card).setAttribute("aria-label", t("command.copy"));
+  }
+  function applySecretTranslation(card, id) {
+    const entry = I18N.secrets?.[id];
+    if (!entry) return;
+    const english = currentLanguage === "en";
+    const order = Array.from(card.parentElement.querySelectorAll(".secret-card")).indexOf(card) + 1;
+    const meta = $(".secret-meta", card);
+    const numberNode = Array.from(meta.childNodes).find((node) => node.nodeType === Node.TEXT_NODE && node.textContent.trim());
+    if (numberNode) numberNode.textContent = ` ${t("secret.number", { number: new Intl.NumberFormat(english ? "en-US" : "fa-IR", { minimumIntegerDigits: 2, useGrouping: false }).format(order) })} `;
+    $("h3", card).textContent = entry[english ? 1 : 0];
+    $("p", card).textContent = entry[english ? 3 : 2];
+    $(".lock-label", card).textContent = `${new Intl.NumberFormat(english ? "en-US" : "fa-IR").format(10)} ◆`;
+    const unlocked = card.classList.contains("unlocked");
+    $(".unlock-button", card).textContent = unlocked ? t("secret.unlocked") : t("secret.lock");
+    $(".copy-button", card).setAttribute("aria-label", t("command.copy"));
+  }
+  function applyStaticTranslations() {
+    document.documentElement.lang = currentLanguage;
+    document.documentElement.dir = currentLanguage === "fa" ? "rtl" : "ltr";
+    document.title = t("page.title");
+    const description = $('meta[name="description"]');
+    if (description) description.content = t("page.description");
+    $$('[data-i18n]').forEach((element) => {
+      const key = element.dataset.i18n;
+      if (key.startsWith("command.")) return applyCommandTranslation(element, key);
+      if (key.startsWith("secret.")) return applySecretTranslation(element, key.slice("secret.".length));
+      if (I18N.text?.[key]) element.textContent = t(key);
+    });
+    $$('[data-i18n-placeholder]').forEach((element) => {
+      const key = element.dataset.i18nPlaceholder;
+      if (I18N.text?.[key]) element.setAttribute("placeholder", t(key));
+    });
+    $$('[data-i18n-aria]').forEach((element) => {
+      const key = element.dataset.i18nAria;
+      if (!I18N.text?.[key]) return;
+      element.setAttribute(element.tagName === "IMG" ? "alt" : "aria-label", t(key));
+    });
+    $$('[data-set-language]').forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.setLanguage === currentLanguage)));
+  }
+  function setLanguage(language, persist = true) {
+    currentLanguage = language === "en" ? "en" : "fa";
+    if (persist) {
+      try { localStorage.setItem(LANGUAGE_STORAGE_KEY, currentLanguage); } catch (_) { /* Language still changes for this page. */ }
+    }
+    applyStaticTranslations();
+    updateEnvironmentText();
+    setAuthMode(authMode);
+    render();
+  }
   const SECRET_CARDS = $$(".secret-card[data-secret]");
   const SECRET_IDS = new Set(SECRET_CARDS.map((card) => card.dataset.secret).filter(Boolean));
   const accountDialog = $("#accountDialog");
@@ -62,11 +160,11 @@
   }
 
   function numberFa(value) {
-    return new Intl.NumberFormat("fa-IR").format(value);
+    return new Intl.NumberFormat(currentLanguage === "fa" ? "fa-IR" : "en-US").format(value);
   }
 
   function showToast(message) {
-    toast.textContent = message;
+    toast.textContent = localizedMessage(message);
     toast.classList.add("show");
     window.clearTimeout(toastTimer);
     toastTimer = window.setTimeout(() => toast.classList.remove("show"), 3200);
@@ -93,7 +191,7 @@
     let payload = {};
     try { payload = await response.json(); } catch (_) { /* Error below uses a safe default. */ }
     if (!response.ok) {
-      const error = new Error(payload.error || "ارتباط با سرور انجام نشد.");
+      const error = new Error(localizedMessage(payload.error) || t("errors.server"));
       error.status = response.status;
       throw error;
     }
@@ -148,69 +246,69 @@
     verificationLink.hidden = true;
 
     if (DEMO_MODE) {
-      $("#authKicker").textContent = "حساب آزمایشی";
-      $("#accountTitle").textContent = "حساب آزمایشی بساز";
-      $("#authDescription").textContent = "یک نام نمایشی وارد کن؛ حساب و موجودی فقط روی همین مرورگر ذخیره می‌شود.";
-      $("#authSubmitButton").textContent = "ساخت حساب آزمایشی ←";
-      $("#authFootnote").textContent = "در نسخه‌ی نمایشی، ایمیل یا رمز عبور از تو نمی‌خواهیم.";
+      $("#authKicker").textContent = t("auth.demo.kicker");
+      $("#accountTitle").textContent = t("auth.demo.title");
+      $("#authDescription").textContent = t("auth.demo.description");
+      $("#authSubmitButton").textContent = t("auth.demo.submit");
+      $("#authFootnote").textContent = t("auth.demo.footnote");
     } else if (isLogin) {
-      $("#authKicker").textContent = "خوش برگشتی";
-      $("#accountTitle").textContent = "ورود به حساب";
-      $("#authDescription").textContent = "با ایمیل تأییدشده و رمز عبورت وارد شو.";
-      $("#authSubmitButton").textContent = "ورود ←";
-      $("#authFootnote").textContent = "اگر هنوز ایمیلت را تأیید نکرده‌ای، پیوند داخل ایمیل را باز کن.";
-      toggle.textContent = "حساب نداری؟ ثبت‌نام کن";
+      $("#authKicker").textContent = t("auth.login.kicker");
+      $("#accountTitle").textContent = t("auth.login.title");
+      $("#authDescription").textContent = t("auth.login.description");
+      $("#authSubmitButton").textContent = t("auth.login.submit");
+      $("#authFootnote").textContent = t("auth.login.footnote");
+      toggle.textContent = t("auth.login.toggle");
     } else {
-      $("#authKicker").textContent = "خوش اومدی به دنیای کدها";
-      $("#accountTitle").textContent = "ساخت حساب";
-      $("#authDescription").textContent = "ایمیلت را تأیید کن تا موجودی توکن و رازهای بازشده به حسابت وصل شوند.";
-      $("#authSubmitButton").textContent = "ساخت حساب و فرستادن پیوند تأیید ←";
-      $("#authFootnote").textContent = "رمز عبور با هش امن ذخیره می‌شود؛ اطلاعات کارت بانکی را در فرم سایت وارد نکن.";
-      toggle.textContent = "حساب داری؟ وارد شو";
+      $("#authKicker").textContent = t("auth.signup.kicker");
+      $("#accountTitle").textContent = t("auth.signup.title");
+      $("#authDescription").textContent = t("auth.signup.description");
+      $("#authSubmitButton").textContent = t("auth.signup.submit");
+      $("#authFootnote").textContent = t("auth.signup.footnote");
+      toggle.textContent = t("auth.signup.toggle");
     }
   }
 
   function updateEnvironmentText() {
-    $("#siteModeLabel").textContent = DEMO_MODE ? "نسخه‌ی نمایشی بلوک‌کُد" : "باشگاه فرمان‌های بلوک‌کُد";
-    $("#siteModeBadge").textContent = DEMO_MODE ? "آزمایشی" : "حساب سروری";
-    $("#walletNote").textContent = DEMO_MODE
-      ? "ⓘ  در نسخه‌ی نمایشی، حساب و موجودی فقط روی همین مرورگر ذخیره می‌شود."
-      : "ⓘ  موجودی و رازهای بازشده در حساب سرور ذخیره می‌شوند.";
+    $("#siteModeLabel").textContent = t(DEMO_MODE ? "site.mode.demo" : "site.mode.server");
+    $("#siteModeBadge").textContent = t(DEMO_MODE ? "site.badge.demo" : "site.badge.server");
+    $("#walletNote").textContent = t(DEMO_MODE ? "wallet.demo" : "wallet.server");
     $("#buyButton").disabled = !DEMO_MODE && !CARD_TRANSFER_ENABLED;
     $("#paymentNote").textContent = DEMO_MODE
-      ? "▣  خرید بالا فقط نمایشی است؛ پولی دریافت نمی‌شود."
+      ? t("payment.demo")
       : CARD_TRANSFER_ENABLED
-        ? "▣  پرداخت با کارت‌به‌کارت انجام می‌شود؛ سفارش پس از بررسی دستی تأیید خواهد شد."
-        : "▣  کارت‌به‌کارت هنوز توسط مدیر سایت فعال نشده است.";
+        ? t("payment.card")
+        : t("payment.disabled");
     $("#demoPurchaseButton").hidden = !DEMO_MODE;
-    $("#purchaseDescription").textContent = "این نسخه خرید را فقط شبیه‌سازی می‌کند؛ هیچ پولی دریافت نمی‌شود.";
-    $("#purchaseTitle").textContent = "۱۰ توکن آزمایشی";
-    $("#purchaseFootnote").textContent = "این دکمه فقط برای آزمایش نمونه‌کار است.";
+    $("#purchaseDescription").textContent = t("demo.purchase.description");
+    $("#purchaseTitle").textContent = t("demo.purchase.title");
+    $("#purchaseFootnote").textContent = t("demo.purchase.footnote");
+    $("#buyButton").querySelector("strong").textContent = t("price");
+    $("#purchaseDialog .purchase-summary strong").textContent = t("price");
   }
   function render() {
     const balance = numberFa(state.tokens);
     $("#headerTokenCount").textContent = balance;
     $("#dashboardTokenCount").textContent = balance;
     $("#dialogTokenCount").textContent = balance;
-    $("#accountButtonLabel").textContent = state.profile ? state.profile.name : "ورود / ثبت‌نام";
+    $("#accountButtonLabel").textContent = state.profile ? state.profile.name : t("account.signin");
     $("#signupView").hidden = Boolean(state.profile);
     $("#profileView").hidden = !state.profile;
     if (state.profile) {
-      $("#profileGreeting").textContent = `سلام، ${state.profile.name}!`;
-      $("#profileKicker").textContent = DEMO_MODE ? "حساب روی این دستگاه" : "حساب تأییدشده";
+      $("#profileGreeting").textContent = t("profile.hello", { name: state.profile.name });
+      $("#profileKicker").textContent = t(DEMO_MODE ? "demo.profile" : "server.profile");
       $("#profileDescription").textContent = DEMO_MODE
-        ? "موجودی آزمایشی تو روی همین مرورگر نگهداری می‌شود."
+        ? t("profile.demo.description")
         : state.profile.email;
-      $("#logoutButton").textContent = DEMO_MODE ? "خروج از حساب آزمایشی" : "خروج از حساب";
+      $("#logoutButton").textContent = t(DEMO_MODE ? "demo.logout" : "server.logout");
     }
 
     const progress = Math.min(state.tokens, 10);
     $("#tokenProgress").style.width = `${progress * 10}%`;
-    $("#progressLabel").textContent = `${numberFa(progress)} از ۱۰`;
+    $("#progressLabel").textContent = t("club.progress.label", { count: numberFa(progress) });
 
     const claimedToday = state.lastClaimDate === tehranDateKey();
     $("#dailyButton").disabled = claimedToday;
-    $("#dailyButtonLabel").textContent = claimedToday ? "توکن امروز گرفته شد" : "گرفتن توکن امروز";
+    $("#dailyButtonLabel").textContent = t(claimedToday ? "daily.claimed" : "daily.claim");
 
     $$(".secret-card").forEach((card) => {
       const unlocked = state.unlocked.includes(card.dataset.secret);
@@ -218,7 +316,7 @@
       $(".secret-copy", card).hidden = !unlocked;
       $(".lock-label", card).hidden = unlocked;
       const button = $(".unlock-button", card);
-      button.textContent = unlocked ? "راز باز شده — فرمان را کپی کن" : "بازکردن راز با ۱۰ توکن";
+      button.textContent = t(unlocked ? "secret.unlocked" : "secret.lock");
       button.disabled = unlocked;
     });
 
@@ -276,7 +374,7 @@
         const link = $("#devVerificationLink");
         if (payload.developmentVerificationUrl) {
           link.href = payload.developmentVerificationUrl;
-          link.textContent = "حالت توسعه: برای فعال‌کردن حساب اینجا بزن";
+          link.textContent = t("auth.devlink");
           link.hidden = false;
         }
         showToast(payload.message);
@@ -408,7 +506,7 @@
       const link = $("#devVerificationLink");
       if (payload.developmentVerificationUrl) {
         link.href = payload.developmentVerificationUrl;
-        link.textContent = "حالت توسعه: برای فعال‌کردن حساب اینجا بزن";
+        link.textContent = t("auth.devlink");
         link.hidden = false;
       }
       showToast(payload.message);
@@ -482,7 +580,7 @@
       form.reset();
       form.hidden = true;
       const result = $("#cardTransferResult");
-      result.textContent = "سفارش ثبت شد. شناسه‌ی سفارش: " + payload.orderId + ". پس از بررسی رسید، نتیجه اعلام می‌شود؛ هنوز توکنی اضافه نشده است.";
+      result.textContent = localizedMessage("سفارش ثبت شد. شناسه‌ی سفارش: " + payload.orderId + ". پس از بررسی رسید، نتیجه اعلام می‌شود؛ هنوز توکنی اضافه نشده است.");
       result.hidden = false;
     } catch (error) {
       showToast(error.message);
@@ -505,6 +603,11 @@
     window.history.replaceState({}, "", window.location.pathname + window.location.hash);
   }
 
+  applyStaticTranslations();
+  $$('[data-set-language]').forEach((button) => button.addEventListener("click", () => setLanguage(button.dataset.setLanguage)));
+  window.addEventListener("storage", (event) => {
+    if (event.key === LANGUAGE_STORAGE_KEY) setLanguage(event.newValue === "en" ? "en" : "fa", false);
+  });
   updateEnvironmentText();
   setAuthMode("signup");
   $("#signupForm").addEventListener("submit", submitAuthentication);
