@@ -679,6 +679,7 @@ const staticOptions = {
 app.get(["/", "/index.html"], (_req, res) => res.sendFile(path.join(__dirname, "index.html")));
 app.get("/styles.css", (_req, res) => res.sendFile(path.join(__dirname, "styles.css")));
 app.get("/app.js", (_req, res) => res.sendFile(path.join(__dirname, "app.js")));
+app.get("/translations.js", (_req, res) => res.sendFile(path.join(__dirname, "translations.js"), staticOptions));
 app.use("/assets", express.static(path.join(__dirname, "assets"), staticOptions));
 app.use((_req, res) => res.status(404).json({ error: "این نشانی پیدا نشد." }));
 
